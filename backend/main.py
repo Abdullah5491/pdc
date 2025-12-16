@@ -20,6 +20,21 @@ from chat_db import ChatDatabase
 
 app = FastAPI()
 
+# Enable CORS for frontend
+from fastapi.middleware.cors import CORSMiddleware
+origins = [
+    "http://localhost:5173",  # Vite default port
+    "http://127.0.0.1:5173",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Mount static files (we will put index.html here)
 # Resolve absolute paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -32,6 +47,8 @@ try:
     vector_store = CHROMAVectorStore()
     embedding_pipeline = EmbeddingPipeline(load_model=True) 
     chat_db = ChatDatabase()
+    # Initialize Retriever Globally to avoid reloading models on every request
+    retriever = RAGRetriever(vector_store=vector_store, embedding_manager=embedding_pipeline, llm_repo='deepseek-ai/DeepSeek-R1-0528-Qwen3-8B')
 except Exception as e:
     print(f"CRITICAL ERROR during initialization: {e}")
     raise e
@@ -49,6 +66,7 @@ class QueryRequest(BaseModel):
     query: str
     chat_id: str  # Required now
     filename: Optional[str] = None
+    similarity_threshold: Optional[float] = None
 
 class CreateChatRequest(BaseModel):
     title: Optional[str] = "New Chat"
@@ -203,8 +221,8 @@ async def chat(request: QueryRequest):
                 role = "User" if msg["role"] == "user" else "Assistant"
                 conversation_context += f"{role}: {msg['content']}\n"
         
-        # Initialize Retriever
-        retriever = RAGRetriever(vector_store=vector_store, llm_repo='deepseek-ai/DeepSeek-R1-0528-Qwen3-8B')
+        # Initialize Retriever - REMOVED, using global instance
+        # retriever = RAGRetriever(vector_store=vector_store, llm_repo='deepseek-ai/DeepSeek-R1-0528-Qwen3-8B')
         
         # Construct filter if filename is provided
         search_filter = {"source_pdf": request.filename} if request.filename else None
@@ -213,7 +231,8 @@ async def chat(request: QueryRequest):
         response = retriever.search(
             query=request.query, 
             filter=search_filter,
-            conversation_context=conversation_context
+            conversation_context=conversation_context,
+            similarity_threshold=request.similarity_threshold
         )
         
         # Save messages to database
@@ -234,6 +253,43 @@ async def chat(request: QueryRequest):
         import traceback
         traceback.print_exc()
         return {"response": f"Error processing query: {str(e)}. (Did you set the HF_API_TOKEN?)"}
+
+
+# =====================
+# Document Management
+# =====================
+
+@app.get("/documents")
+async def get_documents():
+    """List all uploaded documents"""
+    if not os.path.exists(DATA_DIR):
+        return []
+    
+    files = []
+    for filename in os.listdir(DATA_DIR):
+        file_path = os.path.join(DATA_DIR, filename)
+        if os.path.isfile(file_path):
+            files.append({
+                "name": filename,
+                "size": os.path.getsize(file_path),
+                "created_at": os.path.getctime(file_path)
+            })
+    return files
+
+@app.delete("/documents/{filename}")
+async def delete_document(filename: str):
+    """Delete a document"""
+    file_path = os.path.join(DATA_DIR, filename)
+    if not os.path.exists(file_path):
+         raise HTTPException(status_code=404, detail="File not found")
+    
+    try:
+        os.remove(file_path)
+        # TODO: Remove from vector store (requires more complex logic or re-indexing)
+        # For now, we just delete the file.
+        return {"status": "deleted", "filename": filename}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

@@ -14,8 +14,8 @@ class RAGRetriever:
     - Better prompt engineering
     """
     
-    def __init__(self, vector_store: CHROMAVectorStore, llm_repo: str = 'deepseek-ai/DeepSeek-R1'):
-        self.embedding_manager = EmbeddingPipeline()
+    def __init__(self, vector_store: CHROMAVectorStore, embedding_manager: EmbeddingPipeline = None, llm_repo: str = 'deepseek-ai/DeepSeek-R1'):
+        self.embedding_manager = embedding_manager if embedding_manager else EmbeddingPipeline()
         self.vector_store = vector_store
         load_dotenv()
         token = os.getenv('HF_API_TOKEN')
@@ -28,15 +28,16 @@ class RAGRetriever:
         self.llm = ChatHuggingFace(llm=endpoint)
         
         # Configurable thresholds
-        self.min_similarity_threshold = 0.25  # Filter out low-quality matches
-        self.top_k = 10  # Retrieve more for better recall
+        self.min_similarity_threshold = 0.25  # Default
+        self.top_k = 10  # Default
 
     def search(
         self, 
         query: str, 
         top_k: int = None, 
         filter: dict = None,
-        conversation_context: str = ""
+        conversation_context: str = "",
+        similarity_threshold: float = None
     ) -> str:
         """
         Main search method with improved accuracy
@@ -47,12 +48,14 @@ class RAGRetriever:
             return "Hello! How can I help you with the document today?"
         
         top_k = top_k or self.top_k
+        threshold = similarity_threshold if similarity_threshold is not None else self.min_similarity_threshold
+        
         results = self.retrieve(query, top_k, filter)
         
         # Filter by similarity threshold
         results = [
             doc for doc in results 
-            if doc.get('similarity_score', 0) >= self.min_similarity_threshold
+            if doc.get('similarity_score', 0) >= threshold
         ]
         
         if not results:

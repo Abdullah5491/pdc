@@ -12,3 +12,8 @@ wheels/
 
 # Data files
 data/
+
+# Databases and Vector Stores
+*.db
+*.sqlite3
+backend/src/vectorStore/
